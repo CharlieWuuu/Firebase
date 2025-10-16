@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>我的 API 文件</title>
+    <style>
+        body { font-family: sans-serif; margin: 20px; }
+        .api-item { border: 1px solid #ccc; padding: 15px; margin-bottom: 15px; border-radius: 8px; }
+        .api-item h3 { margin-top: 0; color: #333; }
+        .api-item p { margin: 5px 0; }
+        .api-item span { font-weight: bold; }
+    </style>
+</head>
+<body>
+    <h1>我的 API 列表</h1>
+    <div id="api-list">
+        <!-- API 列表將在這裡動態載入 -->
+        載入中...
+    </div>
+
+    <!-- Firebase SDKs -->
+    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+
+    <script>
+        // Your web app's Firebase configuration
+        // TODO: 將這些替換為您專案的實際配置
+        const firebaseConfig = {
+            apiKey: "YOUR_API_KEY",
+            authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
+            projectId: "YOUR_PROJECT_ID", // 例如: besttour-api-fa91b
+            storageBucket: "YOUR_PROJECT_ID.appspot.com",
+            messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
+            appId: "YOUR_APP_ID"
+        };
+
+        // Initialize Firebase
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.firestore();
+
+        document.addEventListener('DOMContentLoaded', async () => {
+            const apiListDiv = document.getElementById('api-list');
+            apiListDiv.innerHTML = ''; // 清空載入中的訊息
+
+            try {
+                const snapshot = await db.collection('apiListings').get();
+                if (snapshot.empty) {
+                    apiListDiv.innerHTML = '<p>沒有 API 數據。</p>';
+                    return;
+                }
+
+                snapshot.forEach(doc => {
+                    const api = doc.data();
+                    const itemDiv = document.createElement('div');
+                    itemDiv.className = 'api-item';
+                    itemDiv.innerHTML = `
+                        <h3>${api.name || '無名稱'}</h3>
+                        <p><span>編號:</span> ${api.id || 'N/A'}</p>
+                        <p><span>排序:</span> ${api.sn || 'N/A'}</p>
+                        <p><span>連結:</span> <a href="${api.link}" target="_blank">${api.link || 'N/A'}</a></p>
+                        <p><span>擁有者:</span> ${api.owner || 'N/A'}</p>
+                        <p><span>編輯權限:</span> ${api.edit ? api.edit.join(', ') : 'N/A'}</p>
+                        <p><span>瀏覽權限:</span> ${api.view ? api.view.join(', ') : 'N/A'}</p>
+                    `;
+                    apiListDiv.appendChild(itemDiv);
+                });
+
+            } catch (error) {
+                console.error("載入 API 列表時發生錯誤: ", error);
+                apiListDiv.innerHTML = '<p>載入 API 列表失敗。</p>';
+            }
+        });
+    </script>
+</body>
+</html>
