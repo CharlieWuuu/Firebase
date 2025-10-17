@@ -68,5 +68,4 @@ node_modules/
 # dataconnect generated files
 .dataconnect
 credentials.json
-output/apiListings.json
-output/country.json
+output/*
