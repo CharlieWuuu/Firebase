@@ -1,47 +1,42 @@
-import { initializeApp } from "firebase/app";
-import { getFirestore, getDocs, collection } from "firebase/firestore";
-import fs from "fs";
+import { createRequire } from 'module'; // 用於支援 require 語法
+import { initializeApp, cert } from 'firebase-admin/app'; // 初始化 firebase 和憑證相關功能
+import { getFirestore } from 'firebase-admin/firestore'; // 從 firebas 引入資料庫存取功能
+import fs from 'fs'; // 用於寫入檔案
+import chalk from 'chalk'; // 用於改變終端機文字顏色
+import path from 'path';
 
-// ⚠️ 請把這裡替換成你的 Firebase 設定
-const firebaseConfig = {
-  apiKey: "AIzaSyD8irMhHzFLEFz-nlAvP7scUORdkVww1lI",
-  authDomain: "besttour-api.firebaseapp.com",
-  databaseURL: "https://besttour-api-default-rtdb.asia-southeast1.firebasedatabase.app",
-  projectId: "besttour-api",
-  storageBucket: "besttour-api.appspot.com",
-  messagingSenderId: "59031234818",
-  appId: "1:59031234818:web:27aaafc995fb42b012fa1b"
-};
+console.log(chalk.yellow('=========== 開始匯出 ==========='));
+const require = createRequire(import.meta.url); // 建立 require 函式，讓 ES Module 可以使用 require 語法
 
-const app = initializeApp(firebaseConfig);
-const db = getFirestore(app);
+console.log(chalk.gray('載入 Firebase 專案憑證...'));
+const serviceAccount = require('./credentials.json');
 
-async function exportCollection(collRef) {
-  const snapshot = await getDocs(collRef);
-  const data = [];
+console.log(chalk.gray('初始化 Firebase 應用程式...'));
+initializeApp({ credential: cert(serviceAccount) });
 
-  for (const doc of snapshot.docs) {
-    const docData = doc.data();
-    const subcollections = await doc.ref.listCollections();
-    const subData = {};
+console.log(chalk.gray('取得 Firestore 資料庫...'));
+const db = getFirestore();
 
-    // 逐一抓取子集合
-    for (const sub of subcollections) {
-      const subSnap = await getDocs(sub);
-      subData[sub.id] = subSnap.docs.map(d => ({ id: d.id, ...d.data() }));
-    }
-
-    data.push({ id: doc.id, ...docData, ...subData });
-  }
-
-  return data;
+const OUTPUT_DIR = './output'; // 定義輸出目錄
+// 確保輸出目錄存在
+if (!fs.existsSync(OUTPUT_DIR)) {
+  fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 }
 
-// ✅ 主流程
-(async () => {
-  const collName = "project"; // 你要匯出的集合名稱
-  const data = await exportCollection(collection(db, collName));
+// 匯出所有集合資料
+const exportAll = async () => {
+  // 取得資料庫中所有集合的列表
+  console.log(chalk.gray(`取得資料庫中所有集合的列表...`));
+  const collections = await db.listCollections();
+  // 遍歷每個集合
+  for (const col of collections) {
+    const snapshot = await col.get(); // 取得該集合的所有文件
+    const data = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })); // 將文件轉換為包含 id 的資料陣列
+    const filePath = path.join(OUTPUT_DIR, `${col.id}.json`); // 使用 path.join 來建立完整的檔案路徑
+    fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf8'); // 將資料寫入 JSON 檔案，使用 2 空格縮排美化格式
+    console.log(chalk.magenta(`已匯出 ${col.id}.json，共 ${data.length} 筆`));
+  }
+  console.log(chalk.yellow('======= 全部集合匯出完成 ======='));
+};
 
-  fs.writeFileSync(`${collName}.json`, JSON.stringify(data, null, 2));
-  console.log(`✅ 已匯出 ${collName}.json，共 ${data.length} 筆文件`);
-})();
+exportAll();
