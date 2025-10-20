@@ -18,9 +18,9 @@ console.log(chalk.gray('取得 Firestore 資料庫...'));
 const db = getFirestore();
 
 const BASE_OUTPUT = './output'; // 根目錄
-// 讀取命令列參數決定模式（typed 或 readable）
 const argMode = (process.argv.find(a => a.startsWith('--mode=')) || '--mode=readable').split('=')[1];
 const MODE = argMode === 'typed' ? 'typed' : 'readable';
+console.log(chalk.gray('確認模式為：' + MODE));
 const OUTPUT_DIR = path.join(BASE_OUTPUT, MODE);
 
 // 確保輸出目錄存在
@@ -28,62 +28,76 @@ if (!fs.existsSync(OUTPUT_DIR)) {
   fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 }
 
-// utility
-const ensureDir = (dir) => {
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-};
+// 判斷型別是否為 timestamp、geopoint 或 ref
+const isTimestampLike = (value) => value && typeof value.toDate === 'function' && typeof value.toMillis === 'function';
+const isGeoPointLike = (value) => value && typeof value === 'object' && ('latitude' in value) && ('longitude' in value);
+const isRefLike = (value) => value && typeof value === 'object' && typeof value.path === 'string';
 
-const isTimestampLike = (v) => v && typeof v.toDate === 'function' && typeof v.toMillis === 'function';
-const isGeoPointLike = (v) => v && typeof v === 'object' && ('latitude' in v) && ('longitude' in v);
-const isRefLike = (v) => v && typeof v === 'object' && typeof v.path === 'string';
+// 資料處理：是否帶型別標記
+const serializeValue = (value, typed = false) => {
+  if (value === null || value === undefined) return value;
 
-// two serializers: readable and typed
-const serializeReadable = (v) => {
-  if (v === null || v === undefined) return v;
-  if (isTimestampLike(v)) {
-    try { return v.toDate().toISOString(); } catch { return String(v); }
+  // 日期
+  if (isTimestampLike(value)) {
+    const v = (() => { try { return value.toDate().toISOString(); } catch { return String(value); } })();
+    return typed ? { __type: 'timestamp', value: v } : v;
   }
-  if (isGeoPointLike(v)) return { latitude: v.latitude, longitude: v.longitude };
-  if (isRefLike(v)) return v.path; // simple path string
-  if (typeof Buffer !== 'undefined' && Buffer.isBuffer(v)) return { __bytes_base64__: v.toString('base64') };
-  if (v instanceof Uint8Array) return { __bytes_base64__: Buffer.from(v).toString('base64') };
-  if (Array.isArray(v)) return v.map(serializeReadable);
-  if (typeof v === 'object') {
-    const o = {};
-    for (const [k, val] of Object.entries(v)) o[k] = serializeReadable(val);
-    return o;
-  }
-  return v;
-};
 
-const serializeTyped = (v) => {
-  if (v === null || v === undefined) return v;
-  if (isTimestampLike(v)) {
-    try { return { __type: 'timestamp', value: v.toDate().toISOString() }; } catch { return { __type: 'timestamp', value: String(v) }; }
+  // 地理座標
+  if (isGeoPointLike(value)) {
+    return typed
+      ? { __type: 'geopoint', lat: value.latitude, lng: value.longitude }
+      : { latitude: value.latitude, longitude: value.longitude };
   }
-  if (isGeoPointLike(v)) return { __type: 'geopoint', lat: v.latitude, lng: v.longitude };
-  if (isRefLike(v)) return { __type: 'ref', path: v.path };
-  if (typeof Buffer !== 'undefined' && Buffer.isBuffer(v)) return { __type: 'bytes_base64', value: v.toString('base64') };
-  if (v instanceof Uint8Array) return { __type: 'bytes_base64', value: Buffer.from(v).toString('base64') };
-  if (Array.isArray(v)) return v.map(serializeTyped);
-  if (typeof v === 'object') {
-    const o = {};
-    for (const [k, val] of Object.entries(v)) o[k] = serializeTyped(val);
-    return o;
+
+  // 參考路徑
+  if (isRefLike(value)) {
+    return typed
+      ? { __type: 'ref', path: value.path }
+      : value.path;
   }
-  return v;
+
+  // Buffer
+  if (typeof Buffer !== 'undefined' && Buffer.isBuffer(value)) {
+    const base64 = value.toString('base64');
+    return typed
+      ? { __type: 'bytes_base64', value: base64 }
+      : { __bytes_base64__: base64 };
+  }
+
+  // Uint8Array
+  if (value instanceof Uint8Array) {
+    const base64 = Buffer.from(value).toString('base64');
+    return typed
+      ? { __type: 'bytes_base64', value: base64 }
+      : { __bytes_base64__: base64 };
+  }
+
+  // 陣列
+  if (Array.isArray(value)) return value.map(v => serializeValue(v, typed));
+
+  // 物件
+  if (typeof value === 'object') {
+    const object = {};
+    for (const [key, val] of Object.entries(value)) object[key] = serializeValue(val, typed);
+    return object;
+  }
+
+  return value;
 };
 
 // 遞迴匯出（會使用傳入的 serializer）
 const exportCollectionRecursive = async (colRef, outDir, serializer) => {
-  ensureDir(outDir);
-  const snapshot = await colRef.get();
-  const docs = [];
+  if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true }); // 確保目錄存在
 
+  const snapshot = await colRef.get(); // 取得此集合的所有文件
+  const docs = []; // 要匯出的文件
+
+  // 處理此文件
   for (const doc of snapshot.docs) {
     const data = doc.data();
     const ser = {};
-    for (const [k, v] of Object.entries(data || {})) ser[k] = serializer(v);
+    for (const [key, value] of Object.entries(data || {})) ser[key] = serializer(value);
     ser.id = doc.id;
     docs.push(ser);
 
@@ -100,11 +114,12 @@ const exportCollectionRecursive = async (colRef, outDir, serializer) => {
   console.log(chalk.magenta(`已匯出 ${filePath}，共 ${docs.length} 筆`));
 };
 
+// 匯出整個資料庫（遞迴所有集合和子集合）
 const exportAllRecursive = async () => {
   try {
-    console.log(chalk.gray(`模式: ${MODE}；取得資料庫中所有集合的列表（遞迴匯出）...`));
-    const cols = await db.listCollections();
-    const serializer = MODE === 'typed' ? serializeTyped : serializeReadable;
+    console.log(chalk.gray(`模式: ${MODE}；取得資料庫中所有集合的列表...`));
+    const cols = await db.listCollections(); // 取得所有頂層集合
+    const serializer = (value) => serializeValue(value, MODE === 'typed');
 
     for (const c of cols) {
       await exportCollectionRecursive(c, OUTPUT_DIR, serializer);
@@ -128,23 +143,5 @@ const exportAllRecursive = async () => {
   }
 };
 
-// 也保留非遞迴的快速匯出（使用選定 serializer）
-const exportAllFlat = async (serializer) => {
-  console.log(chalk.gray(`快速扁平匯出（非遞迴）`));
-  const collections = await db.listCollections();
-  for (const col of collections) {
-    const snapshot = await col.get();
-    const data = snapshot.docs.map((doc) => {
-      const ser = {};
-      for (const [k, v] of Object.entries(doc.data() || {})) ser[k] = serializer(v);
-      return { id: doc.id, ...ser };
-    });
-    const filePath = path.join(OUTPUT_DIR, `${col.id}.json`);
-    fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf8');
-    console.log(chalk.magenta(`已匯出 ${col.id}.json，共 ${data.length} 筆`));
-  }
-  console.log(chalk.yellow('======= 扁平匯出完成 ======='));
-};
-
-// 執行（預設遞迴匯出）；若要改為扁平匯出請手動呼叫 exportAllFlat(serializer)
+// 執行
 exportAllRecursive();

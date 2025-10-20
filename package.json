@@ -5,6 +5,8 @@
   "dependencies": {
     "chalk": "^5.6.2",
     "firebase-admin": "^13.5.0",
+    "firestore-export-import": "^1.6.0",
+    "fs": "^0.0.1-security",
     "path": "^0.12.7"
   }
 }
